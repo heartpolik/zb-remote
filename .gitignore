@@ -1,0 +1,10 @@
+build/
+build-*/
+**/build/
+**/build-*/
+.DS_Store
+__pycache__/
+*.pyc
+# local backups of earlier variants (history lives in git)
+*.bak*
+src.bak-*/

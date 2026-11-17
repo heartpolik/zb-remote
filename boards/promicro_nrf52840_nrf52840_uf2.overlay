@@ -1,0 +1,119 @@
+/* Pro Micro nRF52840 (nice!nano clone), Adafruit UF2 bootloader + S140 v6 region kept.
+ * Flash: 0x26000 app .. 0xD0000 | settings 8K | zboss_nvram 32K | zboss product cfg 4K | free | UF2 @0xF4000
+ */
+/delete-node/ &storage_partition;
+
+&code_partition {
+	reg = <0x00026000 0x000aa000>;
+};
+
+&flash0 {
+	partitions {
+		storage_partition: partition@d0000 {
+			label = "storage";
+			reg = <0x000d0000 0x00002000>;
+		};
+		zboss_nvram: partition@d2000 {
+			label = "zboss-nvram";
+			reg = <0x000d2000 0x00008000>;
+		};
+		zboss_product_config: partition@da000 {
+			label = "zboss-product-config";
+			reg = <0x000da000 0x00001000>;
+		};
+	};
+};
+
+/ {
+	chosen {
+		ncs,zigbee-timer = &timer2;
+	};
+
+	zephyr,user {
+		/* Keypad: the 8 pads of the removed remote IC, pad 1..8 -> these pins (left header).
+		 * Every pair of lines is scanned, buttons = pairs (see src/keymap.h). */
+		kp-gpios = <&gpio0 6  GPIO_PULL_UP>,  /* 006 (D1) -> line 1 = IC GND */
+			   <&gpio0 8  GPIO_PULL_UP>,  /* 008 (D0) -> line 2 */
+			   <&gpio0 22 GPIO_PULL_UP>,  /* 022 (D4) -> line 3 */
+			   <&gpio0 24 GPIO_PULL_UP>,  /* 024 (D5) -> line 4 */
+			   <&gpio1 0  GPIO_PULL_UP>,  /* 100 (D6) -> line 5 */
+			   <&gpio0 11 GPIO_PULL_UP>;  /* 011 (D7) -> line 6 */
+		/* External VCC switch (powers the OLED) */
+		vcc-ctrl-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+		io-channels = <&adc 0>;
+	};
+};
+
+&timer2 {
+	status = "okay";
+};
+
+/* UART0 (P0.09/P0.10) not used */
+&uart0 {
+	status = "disabled";
+};
+
+/* OLED on I2C0: SDA P0.17 (D2), SCL P0.20 (D3) */
+&pinctrl {
+	i2c0_default: i2c0_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 17)>,
+				<NRF_PSEL(TWIM_SCL, 0, 20)>;
+		};
+	};
+	i2c0_sleep: i2c0_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 17)>,
+				<NRF_PSEL(TWIM_SCL, 0, 20)>;
+			low-power-enable;
+		};
+	};
+};
+
+/* Battery: VDDH/5 */
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
+		zephyr,input-positive = <NRF_SAADC_VDDHDIV5>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* Buttons use PORT/SENSE instead of GPIOTE IN channels (only 8 exist, we need 14) */
+&gpio0 {
+	sense-edge-mask = <0xffffffff>;
+};
+&gpio1 {
+	sense-edge-mask = <0x0000ffff>;
+};
+
+/ {
+	chosen {
+		zephyr,display = &oled;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	oled: ssd1306@3c {
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		prechargep = <0xf1>;
+		zephyr,deferred-init;
+	};
+};

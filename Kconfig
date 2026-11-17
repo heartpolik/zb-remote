@@ -1,0 +1,7 @@
+menu "zb-remote"
+config APP_WAIT_HOST
+	bool "Wait up to 20 s for USB host to open the console before starting"
+config APP_RAM_PWRDN
+	bool "Power down unused RAM"
+endmenu
+source "Kconfig.zephyr"
