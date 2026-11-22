@@ -1,6 +1,6 @@
 // Zigbee2MQTT external converter for zb-remote (nRF52840, 14 buttons, 0.91" OLED).
 // Buttons: genMultistateInput.presentValue = button*10 + action (1 single, 2 double, 3 hold).
-// Display 128x64 (landscape 3 tiles in a row / portrait 3 stacked): cluster 0xFC10, 0..2 = tiles "icon|value", 3 = wake s, 4 = alert "icon|l1|l2|l3", 5 = flip.
+// Display 128x64 two-colour (status bar yellow, 3 tiles in a row blue): cluster 0xFC10, 0..2 = tiles "icon|value", 3 = wake s, 4 = alert "icon|l1|l2|l3", 5 = flip.
 // Icons: bell door door_open lock unlock bulb bulb_off temp power battery home moon sun flame snow drop plug fan check cross link search star cam tv button
 import * as fz from 'zigbee-herdsman-converters/converters/fromZigbee';
 import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
@@ -38,14 +38,14 @@ function utf8Bytes(text) {
 }
 
 // Z2M calls a converter once per message, so handle every display key here in one ZCL write
-const STR_KEYS = ['tile1', 'tile2', 'tile3', 'alert'];
+const STR_KEYS = ['title', 'tile1', 'tile2', 'tile3', 'alert'];
 const tzDisplay = {
-    key: [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y', 'portrait'],
+    key: [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y'],
     convertSet: async (entity, key, value, meta) => {
         const ep = meta.device.getEndpoint(1);
         const attrs = {};
         const state = {};
-        for (const k of [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y', 'portrait']) {
+        for (const k of [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y']) {
             if (!(k in meta.message)) continue;
             const v = meta.message[k];
             if (k === 'offset_x' || k === 'offset_y') {
@@ -54,10 +54,6 @@ const tzDisplay = {
                 state[k] = o;
             } else if (k === 'wake') {
                 attrs.wake = Math.max(0, Math.min(255, Number(v) || 0));
-            } else if (k === 'portrait') {
-                const f = v === true || v === 'ON' || v === 1 || v === '1';
-                attrs.portrait = f ? 1 : 0;
-                state.portrait = f ? 'ON' : 'OFF';
             } else if (k === 'flip') {
                 const f = v === true || v === 'ON' || v === 1 || v === '1';
                 attrs.flip = f ? 1 : 0;
@@ -93,7 +89,7 @@ export default {
                 flip: {ID: 0x0005, type: Zcl.DataType.UINT8, write: true},
                 xoff: {ID: 0x0006, type: Zcl.DataType.INT8, write: true},
                 yoff: {ID: 0x0007, type: Zcl.DataType.INT8, write: true},
-                portrait: {ID: 0x0008, type: Zcl.DataType.UINT8, write: true},
+                title: {ID: 0x0009, type: Zcl.DataType.OCTET_STR, write: true},
             },
             commands: {},
             commandsResponse: {},
@@ -105,13 +101,13 @@ export default {
         e.action(actionValues),
         e.battery(),
         e.battery_voltage(),
+        e.text('title', ea.STATE_SET).withDescription('Header text in the yellow band (e.g. selected room); empty shows battery %'),
         e.text('tile1', ea.STATE_SET).withDescription('Tile 1: "icon|value", e.g. "temp|23.4°"'),
         e.text('tile2', ea.STATE_SET).withDescription('Tile 2: "icon|value"'),
         e.text('tile3', ea.STATE_SET).withDescription('Tile 3: "icon|value"'),
-        e.text('alert', ea.STATE_SET).withDescription('Full-screen alert "icon|line1|line2|line3", empty clears'),
-        e.numeric('offset_x', ea.STATE_SET).withValueMin(-16).withValueMax(16).withUnit('px').withDescription('Shift picture horizontally (portrait)'),
-        e.numeric('offset_y', ea.STATE_SET).withValueMin(-32).withValueMax(32).withUnit('px').withDescription('Shift picture vertically (portrait)'),
-        e.binary('portrait', ea.STATE_SET, 'ON', 'OFF').withDescription('Portrait layout (64x128, tiles stacked); landscape = 3 tiles in a row'),
+        e.text('alert', ea.STATE_SET).withDescription('Full-screen alert "icon|title|line2|line3" (title in the yellow band), empty clears'),
+        e.numeric('offset_x', ea.STATE_SET).withValueMin(-16).withValueMax(16).withUnit('px').withDescription('Shift picture horizontally'),
+        e.numeric('offset_y', ea.STATE_SET).withValueMin(-32).withValueMax(32).withUnit('px').withDescription('Shift picture vertically'),
         e.binary('flip', ea.STATE_SET, 'ON', 'OFF').withDescription('Rotate screen 180°'),
         e.numeric('wake', ea.SET).withValueMin(0).withValueMax(255).withUnit('s').withDescription('Turn the screen on for N seconds'),
     ],

@@ -9,7 +9,8 @@ LOG_MODULE_REGISTER(dispcl, LOG_LEVEL_INF);
 
 static zb_uint8_t tile_attr[3][1 + DISPLAY_SPEC_BYTES];
 static zb_uint8_t alert_attr[1 + DISPLAY_SPEC_BYTES];
-static zb_uint8_t wake_attr, flip_attr, portrait_attr;
+static zb_uint8_t title_attr[1 + DISPLAY_SPEC_BYTES];
+static zb_uint8_t wake_attr, flip_attr;
 static zb_int8_t xoff_attr, yoff_attr;
 static zb_uint16_t cluster_rev = 1;
 
@@ -26,14 +27,14 @@ zb_zcl_attr_t display_attr_list[] = {
 	{ 0x0005, ZB_ZCL_ATTR_TYPE_U8, RW, NM, &flip_attr },
 	{ 0x0006, ZB_ZCL_ATTR_TYPE_S8, RW, NM, &xoff_attr },
 	{ 0x0007, ZB_ZCL_ATTR_TYPE_S8, RW, NM, &yoff_attr },
-	{ 0x0008, ZB_ZCL_ATTR_TYPE_U8, RW, NM, &portrait_attr },
+	{ 0x0009, ZB_ZCL_ATTR_TYPE_OCTET_STRING, RW, NM, title_attr },
 	{ ZB_ZCL_NULL_ID, 0, 0, NM, NULL },
 };
 BUILD_ASSERT(ARRAY_SIZE(display_attr_list) == DISPLAY_ATTR_COUNT);
 
 static bool is_str(zb_uint16_t id)
 {
-	return id <= 0x0002 || id == 0x0004;
+	return id <= 0x0002 || id == 0x0004 || id == 0x0009;
 }
 
 static zb_ret_t check_value(zb_uint16_t attr_id, zb_uint8_t ep, zb_uint8_t *value)
@@ -53,7 +54,9 @@ static void write_hook(zb_uint8_t ep, zb_uint16_t attr_id, zb_uint8_t *v, zb_uin
 		memcpy(tmp, &v[1], n);
 		tmp[n] = 0;
 		LOG_INF("attr 0x%04x = \"%s\"", attr_id, tmp);
-		if (attr_id == 0x0004) {
+		if (attr_id == 0x0009) {
+			ui_set_title(tmp);
+		} else if (attr_id == 0x0004) {
 			ui_set_alert(tmp);
 		} else {
 			extern bool ha_tiles;
@@ -64,8 +67,6 @@ static void write_hook(zb_uint8_t ep, zb_uint16_t attr_id, zb_uint8_t *v, zb_uin
 		oled_wake(v[0] * 1000);
 	} else if (attr_id == 0x0005) {
 		ui_set_flip(v[0] != 0);
-	} else if (attr_id == 0x0008) {
-		ui_set_portrait(v[0] != 0);
 	} else if (attr_id == 0x0006) {
 		ui_set_offset((int8_t)v[0], yoff_attr);
 	} else if (attr_id == 0x0007) {

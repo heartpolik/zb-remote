@@ -1,4 +1,4 @@
-/* SSD1306 128x64: landscape (default) or portrait UI with pixel-art icons. */
+/* SSD1306 128x64 (two-colour: yellow rows 0..15, blue below): UI with pixel-art icons. */
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/display.h>
@@ -14,9 +14,8 @@ LOG_MODULE_REGISTER(oled, LOG_LEVEL_INF);
 #define PW 128 /* physical */
 #define PH 64
 /* logical size depends on orientation */
-static bool portrait;
-#define W (portrait ? PH : PW)
-#define H (portrait ? PW : PH)
+#define W PW
+#define H PH
 #define OLED_ON_MS 10000
 #define ALERT_ON_MS 30000
 #define ANIM_MS 300
@@ -36,6 +35,7 @@ static struct {
 	int phase;
 } alert;
 static int batt_pct = -1;
+static char title[UI_TEXT_MAX]; /* header text (yellow band), e.g. selected room */
 static bool linked, flip, ready, on;
 static int xoff, yoff;
 
@@ -49,7 +49,7 @@ static K_WORK_DEFINE(draw_work, draw_fn);
 static void anim_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(anim_work, anim_fn);
 
-/* ---------- drawing primitives (portrait coords) ---------- */
+/* ---------- drawing primitives ---------- */
 static void px(int x, int y, bool v)
 {
 	x += xoff;
@@ -57,14 +57,8 @@ static void px(int x, int y, bool v)
 	if (x < 0 || x >= W || y < 0 || y >= H) {
 		return;
 	}
-	int X, Y;
-	if (portrait) { /* rotate 90° */
-		X = flip ? (PW - 1 - y) : y;
-		Y = flip ? x : (PH - 1 - x);
-	} else {
-		X = flip ? (PW - 1 - x) : x;
-		Y = flip ? (PH - 1 - y) : y;
-	}
+	int X = flip ? (PW - 1 - x) : x;
+	int Y = flip ? (PH - 1 - y) : y;
 	uint8_t *b = &fb[(Y / 8) * PW + X];
 	if (v) {
 		*b |= BIT(Y % 8);
@@ -211,9 +205,35 @@ static void draw_text_centered(int y, const char *s)
 }
 
 /* ---------- screens ---------- */
+static void draw_battery_icon(int x0)
+{
+	rect(x0, 2, x0 + 15, 9, false);
+	rect(x0 + 16, 4, x0 + 17, 7, true);
+	if (batt_pct >= 0) {
+		int fill = (batt_pct * 12 + 50) / 100;
+		if (fill > 0) {
+			rect(x0 + 2, 4, x0 + 1 + fill, 7, true);
+		}
+	}
+}
+
 static void draw_status_bar(void)
 {
-	/* battery (left), link dot (right), separator at y=12 */
+	if (title[0]) {
+		/* title (left), battery + link dot (right), separator at y=12 */
+		clip_l = 1;
+		clip_r = W - 37;
+		draw_text(1, 0, title);
+		clip_l = -10000;
+		clip_r = 10000;
+		draw_battery_icon(W - 32);
+		disc(W - 6, 6, 3, linked);
+		for (int x = 0; x < W; x++) {
+			px(x, 12, true);
+		}
+		return;
+	}
+	/* battery + percent (left), link dot (right), separator at y=12 */
 	rect(1, 2, 16, 9, false);
 	rect(17, 4, 18, 7, true);
 	if (batt_pct >= 0) {
@@ -221,11 +241,9 @@ static void draw_status_bar(void)
 		if (fill > 0) {
 			rect(3, 4, 2 + fill, 7, true);
 		}
-		if (!portrait) {
-			char t[8];
-			snprintk(t, sizeof(t), "%d%%", batt_pct);
-			draw_text(22, 0, t);
-		}
+		char t[8];
+		snprintk(t, sizeof(t), "%d%%", batt_pct);
+		draw_text(22, 0, t);
 	}
 	disc(W - 6, 6, 3, linked);
 	for (int x = 0; x < W; x++) {
@@ -236,50 +254,37 @@ static void draw_status_bar(void)
 static void draw_home(void)
 {
 	draw_status_bar();
-	if (!portrait) {
-		/* 3 tiles side by side, 42 px each: icon on top, value below */
-		for (int i = 0; i < UI_TILES; i++) {
-			int x0 = i * 43;
-			if (i) {
-				for (int y = 16; y < H - 2; y += 2) {
-					px(x0 - 1, y, true);
-				}
-			}
-			draw_icon(tiles[i].icon, x0 + 9, 16);
-			draw_text_box(x0 + 1, 41, 44, tiles[i].text);
-		}
-		return;
-	}
-	/* portrait 64x128: 3 tiles stacked, 38 px each */
+	/* 3 tiles side by side, 42 px each: icon on top, value below */
 	for (int i = 0; i < UI_TILES; i++) {
-		int y0 = 15 + i * 38;
-		draw_icon(tiles[i].icon, (W - 24) / 2, y0);
-		draw_text_centered(y0 + 25, tiles[i].text);
+		int x0 = i * 43;
+		if (i) {
+			for (int y = 16; y < H - 2; y += 2) {
+				px(x0 - 1, y, true);
+			}
+		}
+		draw_icon(tiles[i].icon, x0 + 9, 16);
+		draw_text_box(x0 + 1, 41, 44, tiles[i].text);
 	}
 }
+
+/* Two-colour panel: physical rows 0..15 are yellow, 16..63 blue (with a gap between).
+ * Alert layout keeps every element inside one colour zone. */
+#define BAND_H 16
 
 static void draw_alert(void)
 {
 	int shake = (alert.phase % 2) ? 2 : -2;
-	int n = 0;
-	for (int i = 0; i < 3; i++) {
-		n += alert.lines[i][0] ? 1 : 0;
-	}
-	if (portrait) {
-		/* 2x icon on top, lines centred below */
-		draw_icon_s(alert.icon, (W - 48) / 2 + shake, 6, 2);
-		int y = 60;
-		for (int i = 0; i < 3; i++) {
-			if (alert.lines[i][0]) {
-				draw_text_centered(y, alert.lines[i]);
-				y += 14;
-			}
-		}
+	/* yellow band: title (line 1); blue body: 2x icon + lines 2-3 */
+	int band_y = flip ? H - BAND_H : 0;
+	int body_y = flip ? 0 : BAND_H;
+	draw_text_centered(band_y + 2, alert.lines[0]);
+	int m = (alert.lines[1][0] ? 1 : 0) + (alert.lines[2][0] ? 1 : 0);
+	if (m == 0) {
+		draw_icon_s(alert.icon, (W - 48) / 2 + shake, body_y, 2);
 	} else {
-		/* 2x icon on the left, up to 3 lines on the right, vertically centred */
-		draw_icon_s(alert.icon, 4 + shake, (H - 48) / 2, 2);
-		int y = (H - n * 14) / 2;
-		for (int i = 0; i < 3; i++) {
+		draw_icon_s(alert.icon, 4 + shake, body_y, 2);
+		int y = body_y + (H - BAND_H - m * 14) / 2 + 1;
+		for (int i = 1; i < 3; i++) {
 			if (alert.lines[i][0]) {
 				draw_text_box(58, W - 58, y, alert.lines[i]);
 				y += 14;
@@ -393,6 +398,17 @@ void ui_set_tile(int idx, const char *spec)
 	}
 }
 
+void ui_set_title(const char *s)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	strncpy(title, s ? s : "", sizeof(title) - 1);
+	title[sizeof(title) - 1] = 0;
+	k_mutex_unlock(&lock);
+	if (on) {
+		k_work_submit(&draw_work);
+	}
+}
+
 void ui_set_alert(const char *spec)
 {
 	char f[4][UI_TEXT_MAX] = { 0 };
@@ -434,14 +450,6 @@ void ui_set_status(int battery_pct, bool is_linked)
 {
 	batt_pct = battery_pct;
 	linked = is_linked;
-	if (on) {
-		k_work_submit(&draw_work);
-	}
-}
-
-void ui_set_portrait(bool p)
-{
-	portrait = p;
 	if (on) {
 		k_work_submit(&draw_work);
 	}

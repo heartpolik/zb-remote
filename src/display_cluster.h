@@ -6,8 +6,8 @@
  *   0x0003         uint8         wake: screen on for N seconds
  *   0x0004         octet string  alert "icon|l1|l2|l3", empty = clear
  *   0x0005         uint8         flip: 1 = rotate 180°
- *   0x0008         uint8         orientation: 0 landscape, 1 portrait
  *   0x0006         int8          x offset (px), 0x0007 int8 y offset (px); shows a frame for 20 s
+ *   0x0009         octet string  title: header text in the yellow band (e.g. room), empty = battery %
  */
 #define ZB_ZCL_CLUSTER_ID_REMOTE_DISPLAY 0xFC10
 #define DISPLAY_SPEC_BYTES 48
