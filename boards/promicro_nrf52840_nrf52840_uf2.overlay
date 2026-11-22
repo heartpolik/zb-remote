@@ -32,12 +32,12 @@
 	zephyr,user {
 		/* Keypad: the 8 pads of the removed remote IC, pad 1..8 -> these pins (left header).
 		 * Every pair of lines is scanned, buttons = pairs (see src/keymap.h). */
-		kp-gpios = <&gpio0 6  GPIO_PULL_UP>,  /* 006 (D1) -> line 1 = IC GND */
-			   <&gpio0 8  GPIO_PULL_UP>,  /* 008 (D0) -> line 2 */
-			   <&gpio0 22 GPIO_PULL_UP>,  /* 022 (D4) -> line 3 */
-			   <&gpio0 24 GPIO_PULL_UP>,  /* 024 (D5) -> line 4 */
-			   <&gpio1 0  GPIO_PULL_UP>,  /* 100 (D6) -> line 5 */
-			   <&gpio0 11 GPIO_PULL_UP>;  /* 011 (D7) -> line 6 */
+		kp-gpios = <&gpio1 6  GPIO_PULL_UP>,  /* 106 (left, bottom)   -> line 1 = IC GND */
+			   <&gpio1 4  GPIO_PULL_UP>,  /* 104 (left, 2nd)      -> line 2 */
+			   <&gpio0 9  GPIO_PULL_UP>,  /* 009 (right, bottom)  -> line 3 (NFC pin, board sets nfct-pins-as-gpios) */
+			   <&gpio0 10 GPIO_PULL_UP>,  /* 010 (right, 2nd)     -> line 4 (NFC pin) */
+			   <&gpio1 11 GPIO_PULL_UP>,  /* 111 (right, 3rd)     -> line 5 */
+			   <&gpio0 11 GPIO_PULL_UP>;  /* 011 (left, 3rd)      -> line 6 */
 		/* External VCC switch (powers the OLED) */
 		vcc-ctrl-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
 		io-channels = <&adc 0>;

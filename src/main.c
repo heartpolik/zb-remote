@@ -25,8 +25,74 @@
 #include "oled.h"
 #include "display_cluster.h"
 #include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/hwinfo.h>
+#include <zephyr/fatal.h>
+#include <zephyr/storage/flash_map.h>
+#include <zephyr/sys/reboot.h>
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
+
+/* last fatal error survives the software reset (noinit RAM) and is logged on the next boot */
+static __noinit struct {
+	uint32_t magic, reason, pc, lr, thread;
+} crash;
+#define CRASH_MAGIC 0xC0FFEE11
+
+void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
+{
+	crash.magic = CRASH_MAGIC;
+	crash.reason = reason;
+	crash.pc = esf ? esf->basic.pc : 0;
+	crash.lr = esf ? esf->basic.lr : 0;
+	crash.thread = (uint32_t)k_current_get();
+	sys_reboot(SYS_REBOOT_COLD);
+}
+
+/* ZBOSS internal assert (linked with --wrap=zb_assert) -> remembered across the reset */
+extern void __real_zb_assert(zb_uint16_t file_id, zb_int_t line);
+void __wrap_zb_assert(zb_uint16_t file_id, zb_int_t line)
+{
+	crash.magic = CRASH_MAGIC;
+	crash.reason = 0xA55E;
+	crash.pc = file_id;
+	crash.lr = (uint32_t)line;
+	crash.thread = 0;
+	if (!k_is_in_isr()) {
+		LOG_ERR("ZBOSS assert file_id %u line %d, rebooting in 1 s", file_id, line);
+		k_msleep(1000); /* let the USB console flush the log */
+	}
+	__real_zb_assert(file_id, line);
+}
+
+
+/* file_id 122 = zb_nvram.c: corrupted NVRAM makes ZBOSS assert on every boot.
+ * Wipe the partition once so the stack starts clean (network has to be re-joined). */
+#define ZB_FILE_ID_NVRAM 122
+static int erase_partition(uint8_t id, const char *name)
+{
+	const struct flash_area *fa;
+	int err = flash_area_open(id, &fa);
+	if (!err) {
+		err = flash_area_erase(fa, 0, fa->fa_size);
+		flash_area_close(fa);
+	}
+	LOG_WRN("%s erased: %d", name, err);
+	return err;
+}
+
+/* NVRAM datasets are encrypted with a PSA master key kept in trusted storage (settings/NVS
+ * in the "storage" partition); if either is corrupted the stack asserts while saving keys.
+ * Wipe both together: the device leaves the network and has to be re-joined. */
+static void nvram_self_heal(void)
+{
+	erase_partition(FIXED_PARTITION_ID(zboss_nvram), "zboss nvram");
+	erase_partition(FIXED_PARTITION_ID(storage_partition), "settings storage (PSA ITS)");
+	/* settings/NVS may already be mounted on the old content -> restart clean */
+	crash.magic = 0;
+	k_msleep(500);
+	sys_reboot(SYS_REBOOT_COLD);
+}
+
 
 #define EP                 1
 #define DEVICE_ID          0x0006 /* HA Remote Control */
@@ -391,7 +457,22 @@ int main(void)
 	if (IS_ENABLED(CONFIG_APP_WAIT_HOST)) {
 		wait_for_host();
 	}
-	LOG_INF("zb-remote starting");
+	uint32_t rc = 0;
+	hwinfo_get_reset_cause(&rc);
+	hwinfo_clear_reset_cause();
+	LOG_INF("zb-remote starting, reset cause 0x%08x", rc);
+	if (crash.magic == CRASH_MAGIC) {
+		if (crash.reason == 0xA55E) {
+			LOG_ERR("previous ZBOSS assert: file_id %u line %u", crash.pc, crash.lr);
+			if (crash.pc == ZB_FILE_ID_NVRAM) {
+				nvram_self_heal();
+			}
+		} else {
+			LOG_ERR("previous crash: reason %u pc 0x%08x lr 0x%08x thread 0x%08x",
+				crash.reason, crash.pc, crash.lr, crash.thread);
+		}
+		crash.magic = 0;
+	}
 	led_init();
 	led_blink(1, 1000, 0);
 	if (oled_init() == 0) {
