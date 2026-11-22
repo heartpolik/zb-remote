@@ -1,6 +1,16 @@
-# Пульт zb_remote (DIY nRF52840, Z2M). Прошивка лише шле "кнопка_дія" й малює те, що пише HA.
+# Пакет Home Assistant для пульта zb-remote — https://github.com/heartpolik/zb-remote (ha/zb_remote.yaml).
+# Джерело правди — репозиторій; у HA лежить копія в /config/packages/zb_remote.yaml (scripts/deploy-ha.sh).
+#
+# Прошивка лише шле "кнопка_дія" (zigbee2mqtt/zb_remote/action) й малює те, що пише HA (…/set).
 # Кімната: K− (5) / K+ (7) перемикають input_select.pult_room; "Загальний" — огляд дому.
 # Екран: title (жовта шапка) = кімната, плитки = світло / яскравість лампи / температура.
+#
+# Під свій дім змінити:
+#   - rooms (anchor &pult_rooms): кімната → main (вкл/вимк), dim (лампа з яскравістю), temp (датчик);
+#   - input_select.pult_room.options: "Загальний" + ті самі назви кімнат, що в rooms;
+#   - pult_render.triggers: entity_id усіх main/dim (світло оновлюється одразу);
+#   - загальний екран (гілка else у pult_render): навантаження / батарея дому / погода;
+#   - Z2M friendly_name пристрою має бути `zb_remote` (або замінити топіки).
 zb_remote:
   input_select:
     pult_room:

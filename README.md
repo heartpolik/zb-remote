@@ -107,10 +107,32 @@ cp -X build/zb-remote/zephyr/zephyr.uf2 /Volumes/NICENANO/
 | `sense-edge-mask` у overlay | GPIOTE має лише 8 каналів |
 | розділи з `0x26000` | там починається застосунок для UF2 bootloader; NVRAM ZBOSS лежить за кодом і переживає перепрошивку |
 
-## Zigbee2MQTT
+## Встановлення в Home Assistant
 
-1. Скопіювати `z2m/zb-remote-14.mjs` у `<z2m data>/external_converters/` і перезапустити Z2M.
-2. Увімкнути permit join і скинути мережу на пульті (кнопка 1, 10 с).
+Усе, що потрібно для відтворення, лежить у цьому репозиторії: прошивка (`src/`, `boards/`), конвертер Zigbee2MQTT (`z2m/`) і пакет Home Assistant (`ha/`). У HA лежать копії; змінювати їх треба тут і розгортати скриптом.
+
+1. **Прошивка** — зібрати й залити (див. [Збірка та прошивка](#збірка-та-прошивка)).
+2. **Конвертер Z2M** — `scripts/deploy-ha.sh converter` (або вручну скопіювати `z2m/zb-remote-14.mjs` у `<z2m data>/external_converters/`), перезапустити Zigbee2MQTT.
+3. **Приєднати пульт** — увімкнути permit join; новий пульт приєднується сам, вже приєднаний скинути утриманням кнопки 1 протягом 10 с.
+4. **Назва в Z2M** — перейменувати пристрій на `zb_remote` (пакет слухає `zigbee2mqtt/zb_remote/action` і пише в `zigbee2mqtt/zb_remote/set`). У нас: Z2M → device rename з `homeassistant_rename`, HA-назва «Пульт».
+5. **Пакет HA** — у `configuration.yaml` мають бути пакети (`homeassistant: packages: !include_dir_merge_named packages`); `scripts/deploy-ha.sh package`, потім перезавантажити Input select і Automations.
+6. **Адаптувати під свій дім** — у `ha/zb_remote.yaml`: кімнати (`rooms`: основне світло, лампа з яскравістю, датчик температури), список `input_select.pult_room`, тригери оновлення екрана, сутності загального екрана. Перелік — у шапці файлу.
+
+`HA_SSH` — ssh-alias хоста HA (за замовчуванням `homeassistant`, HAOS з add-on «Advanced SSH & Web Terminal»).
+
+### Що робить пакет `ha/zb_remote.yaml`
+
+| Кнопка | Дія |
+|---|---|
+| K− / K+ (5 / 7) | попередня / наступна кімната (по колу, «Загальний» → кімнати) |
+| ⏻ (1) | основне світло в обраній кімнаті; утримання — вимкнути все світло з пульта |
+| ☼ / ☼ (4 / 8) | яскравість лампи кімнати ±10 %, утримання ±30 % |
+| 20 / 50 / 100 % (9 / 10 / 11) | яскравість лампи кімнати |
+| ⟳, без підпису, ☾, 3000K / 6500K / 4000K | ще не призначені |
+
+Екран оновлюється одразу при зміні світла й при перемиканні кімнати, решта значень — раз на 5 хв. Через 2 хв без натискань пульт повертається на «Загальний».
+
+## Zigbee2MQTT
 
 ### Кластер дисплея `0xFC10` (manufacturer-specific, ендпоінт 1)
 
@@ -176,6 +198,7 @@ src/
 boards/              overlay для promicro_nrf52840/nrf52840/uf2
 z2m/                 external converter для Zigbee2MQTT
 ha/                  пакет Home Assistant (/config/packages/zb_remote.yaml): кімнати, кнопки, екран
+scripts/deploy-ha.sh розгортання конвертера й пакета в HA по SSH
 tools/
   icons.py           піксель-арт іконки 24×24 → src/icons.c (+ docs/icons.png)
   genfont.py         TTF → 1-бітний пропорційний шрифт (ASCII + українська)
