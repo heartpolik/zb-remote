@@ -10,7 +10,7 @@ LOG_MODULE_REGISTER(dispcl, LOG_LEVEL_INF);
 static zb_uint8_t tile_attr[3][1 + DISPLAY_SPEC_BYTES];
 static zb_uint8_t alert_attr[1 + DISPLAY_SPEC_BYTES];
 static zb_uint8_t title_attr[1 + DISPLAY_SPEC_BYTES];
-static zb_uint8_t wake_attr, flip_attr;
+static zb_uint8_t wake_attr, flip_attr, charging_attr;
 static zb_int8_t xoff_attr, yoff_attr;
 static zb_uint16_t cluster_rev = 1;
 
@@ -28,6 +28,7 @@ zb_zcl_attr_t display_attr_list[] = {
 	{ 0x0006, ZB_ZCL_ATTR_TYPE_S8, RW, NM, &xoff_attr },
 	{ 0x0007, ZB_ZCL_ATTR_TYPE_S8, RW, NM, &yoff_attr },
 	{ 0x0009, ZB_ZCL_ATTR_TYPE_OCTET_STRING, RW, NM, title_attr },
+	{ DISPLAY_ATTR_CHARGING, ZB_ZCL_ATTR_TYPE_U8, ZB_ZCL_ATTR_ACCESS_READ_ONLY, NM, &charging_attr },
 	{ ZB_ZCL_NULL_ID, 0, 0, NM, NULL },
 };
 BUILD_ASSERT(ARRAY_SIZE(display_attr_list) == DISPLAY_ATTR_COUNT);
@@ -72,6 +73,11 @@ static void write_hook(zb_uint8_t ep, zb_uint16_t attr_id, zb_uint8_t *v, zb_uin
 	} else if (attr_id == 0x0007) {
 		ui_set_offset(xoff_attr, (int8_t)v[0]);
 	}
+}
+
+void display_set_charging(bool c)
+{
+	charging_attr = c ? 1 : 0;
 }
 
 void display_cluster_init(void)

@@ -35,6 +35,7 @@ static struct {
 	int phase;
 } alert;
 static int batt_pct = -1;
+static bool charging; /* USB power present */
 static char title[UI_TEXT_MAX]; /* header text (yellow band), e.g. selected room */
 static bool linked, flip, ready, on;
 static int xoff, yoff;
@@ -205,11 +206,33 @@ static void draw_text_centered(int y, const char *s)
 }
 
 /* ---------- screens ---------- */
+/* lightning bolt inside the battery outline (x0..x0+15, y 2..9) */
+static void draw_bolt(int x0)
+{
+	static const char *b[] = {
+		"......###...",
+		"....####....",
+		"..#########.",
+		".#########..",
+		"....####....",
+		"...###......",
+	};
+	for (int y = 0; y < 6; y++) {
+		for (int x = 0; b[y][x]; x++) {
+			if (b[y][x] == '#') {
+				px(x0 + 2 + x, 3 + y, true);
+			}
+		}
+	}
+}
+
 static void draw_battery_icon(int x0)
 {
 	rect(x0, 2, x0 + 15, 9, false);
 	rect(x0 + 16, 4, x0 + 17, 7, true);
-	if (batt_pct >= 0) {
+	if (charging) {
+		draw_bolt(x0);
+	} else if (batt_pct >= 0) {
 		int fill = (batt_pct * 12 + 50) / 100;
 		if (fill > 0) {
 			rect(x0 + 2, 4, x0 + 1 + fill, 7, true);
@@ -234,13 +257,10 @@ static void draw_status_bar(void)
 		return;
 	}
 	/* battery + percent (left), link dot (right), separator at y=12 */
-	rect(1, 2, 16, 9, false);
-	rect(17, 4, 18, 7, true);
-	if (batt_pct >= 0) {
-		int fill = (batt_pct * 12 + 50) / 100;
-		if (fill > 0) {
-			rect(3, 4, 2 + fill, 7, true);
-		}
+	draw_battery_icon(1);
+	if (charging) {
+		draw_text(22, 0, "USB");
+	} else if (batt_pct >= 0) {
 		char t[8];
 		snprintk(t, sizeof(t), "%d%%", batt_pct);
 		draw_text(22, 0, t);
@@ -450,6 +470,17 @@ void ui_set_status(int battery_pct, bool is_linked)
 {
 	batt_pct = battery_pct;
 	linked = is_linked;
+	if (on) {
+		k_work_submit(&draw_work);
+	}
+}
+
+void ui_set_charging(bool c)
+{
+	if (charging == c) {
+		return;
+	}
+	charging = c;
 	if (on) {
 		k_work_submit(&draw_work);
 	}

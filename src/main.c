@@ -28,6 +28,7 @@
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/fatal.h>
 #include <zephyr/storage/flash_map.h>
+#include <hal/nrf_power.h>
 #include <zephyr/sys/reboot.h>
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
@@ -97,7 +98,8 @@ static void nvram_self_heal(void)
 #define EP                 1
 #define DEVICE_ID          0x0006 /* HA Remote Control */
 #define LONG_POLL_MS       5000
-#define TURBO_POLL_MS      10000
+#define FAST_POLL_MS       100   /* while the screen is on after a press */
+#define FAST_POLL_FOR      K_SECONDS(10)
 #define BATTERY_PERIOD     K_HOURS(1)
 
 
@@ -277,8 +279,18 @@ static void flush_reports(void)
 /* ---------- battery ---------- */
 static int last_pct = -1;
 bool ha_tiles; /* set once HA wrote any tile */
+static bool usb_present(void)
+{
+	return nrf_power_usbregstatus_vbusdet_get(NRF_POWER);
+}
+
 static void battery_update(void)
 {
+	if (usb_present()) {
+		/* VDDH is fed from VBUS: the reading is USB voltage, not the cell */
+		LOG_INF("on USB power, battery report skipped");
+		return;
+	}
 	int mv = battery_mv();
 	if (mv < 0) {
 		LOG_WRN("battery read failed: %d", mv);
@@ -314,11 +326,58 @@ static void battery_work_fn(struct k_work *w)
 	k_work_reschedule(&battery_work, BATTERY_PERIOD);
 }
 
-/* ---------- buttons ---------- */
-static void turbo_poll(zb_cb_param_t unused)
+/* ---------- USB power (charging) ---------- */
+#define POWER_POLL K_SECONDS(3)
+static int on_usb = -1; /* unknown until the first check -> always reported once */
+
+static void power_work_fn(struct k_work *w);
+static K_WORK_DELAYABLE_DEFINE(power_work, power_work_fn);
+
+static void power_work_fn(struct k_work *w)
 {
-	ZVUNUSED(unused);
-	zb_zdo_pim_start_turbo_poll_continuous(TURBO_POLL_MS);
+	bool u = usb_present();
+
+	if ((int)u != on_usb) {
+		bool unplugged = on_usb == 1;
+
+		on_usb = u;
+		LOG_INF("USB power %s", u ? "connected" : "removed");
+		ui_set_charging(u);
+		display_set_charging(u);
+		struct report_req r = {
+			.cluster = ZB_ZCL_CLUSTER_ID_REMOTE_DISPLAY, .n = 1,
+			.a = { { DISPLAY_ATTR_CHARGING, ZB_ZCL_ATTR_TYPE_U8, u } },
+		};
+		queue_report(&r);
+		if (unplugged) {
+			/* real cell voltage again: measure once it settles */
+			k_work_reschedule(&battery_work, K_SECONDS(2));
+		}
+	}
+	k_work_reschedule(&power_work, POWER_POLL);
+}
+
+/* ---------- buttons ---------- */
+/* Fixed fast polling while the user looks at the screen. ZBOSS turbo poll is adaptive:
+ * the interval grows from 100-250 ms up to 3 s, so an answer from HA that arrives ~1 s after
+ * the press waited 2+ s in the parent's queue. Long poll is restored when the window ends. */
+static void set_poll(zb_cb_param_t ms)
+{
+	zb_zdo_pim_set_long_poll_interval(ms);
+}
+
+static void slow_poll_fn(struct k_work *w)
+{
+	zigbee_schedule_callback(set_poll, LONG_POLL_MS);
+}
+static K_WORK_DELAYABLE_DEFINE(slow_poll_work, slow_poll_fn);
+
+static void fast_poll(void)
+{
+	if (!k_work_delayable_is_pending(&slow_poll_work)) {
+		zigbee_schedule_callback(set_poll, FAST_POLL_MS);
+	}
+	k_work_reschedule(&slow_poll_work, FAST_POLL_FOR);
 }
 
 static void on_button(uint8_t btn, enum btn_action action)
@@ -344,8 +403,8 @@ static void on_button(uint8_t btn, enum btn_action action)
 		.a = { { ZB_ZCL_ATTR_MULTI_INPUT_PRESENT_VALUE_ID, ZB_ZCL_ATTR_TYPE_U16, value } },
 	};
 	queue_report(&r);
-	/* stay responsive for a while so HA can answer (display text etc.) */
-	zigbee_schedule_callback(turbo_poll, 0);
+	/* stay responsive while the screen is on so HA's answer shows up at once */
+	fast_poll();
 
 	if (last_battery_ms < 0 || k_uptime_get() - last_battery_ms > 10 * 60 * 1000) {
 		k_work_reschedule(&battery_work, K_MSEC(500));
@@ -480,6 +539,8 @@ int main(void)
 		ui_set_tile(1, "button|—");
 		oled_wake(15000);
 	}
+
+	k_work_reschedule(&power_work, K_NO_WAIT);
 
 	buttons_init(on_button);
 	int kerr = keypad_init(on_raw_pair);

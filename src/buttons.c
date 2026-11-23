@@ -5,6 +5,11 @@
 #define HOLD_MS   600
 #define DOUBLE_MS 300
 
+/* Buttons without a double click: single is sent right on release (no 300 ms wait for a
+ * second click). Hold still works. Bit (n-1) = button n: the d-pad 4-8 (☼ up/down, room ◀ ▶,
+ * ☾ in the centre), pressed in quick series. All other buttons keep double click. */
+#define NO_DOUBLE_MASK (BIT(4 - 1) | BIT(5 - 1) | BIT(6 - 1) | BIT(7 - 1) | BIT(8 - 1))
+
 struct btn_state {
 	struct k_work_delayable timer;
 	bool pressed;
@@ -46,6 +51,10 @@ void buttons_feed(uint8_t btn, bool now)
 		k_work_reschedule(&s->timer, K_MSEC(HOLD_MS));
 	} else if (s->hold_fired) {
 		k_work_cancel_delayable(&s->timer);
+	} else if (NO_DOUBLE_MASK & BIT(btn - 1)) {
+		k_work_cancel_delayable(&s->timer);
+		s->clicks = 0;
+		user_cb(btn, BTN_SINGLE);
 	} else if (++s->clicks >= 2) {
 		k_work_cancel_delayable(&s->timer);
 		s->clicks = 0;

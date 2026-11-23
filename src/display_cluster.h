@@ -8,6 +8,7 @@
  *   0x0005         uint8         flip: 1 = rotate 180°
  *   0x0006         int8          x offset (px), 0x0007 int8 y offset (px); shows a frame for 20 s
  *   0x0009         octet string  title: header text in the yellow band (e.g. room), empty = battery %
+ *   0x000A         uint8 (RO)    charging: 1 = USB power present (reported on change)
  */
 #define ZB_ZCL_CLUSTER_ID_REMOTE_DISPLAY 0xFC10
 #define DISPLAY_SPEC_BYTES 48
@@ -17,4 +18,6 @@ void display_cluster_init(void);
 #define ZB_ZCL_CLUSTER_ID_REMOTE_DISPLAY_CLIENT_ROLE_INIT NULL
 
 extern zb_zcl_attr_t display_attr_list[];
-#define DISPLAY_ATTR_COUNT 11
+#define DISPLAY_ATTR_COUNT 12
+#define DISPLAY_ATTR_CHARGING 0x000A
+void display_set_charging(bool c);

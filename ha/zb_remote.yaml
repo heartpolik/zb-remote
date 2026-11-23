@@ -25,6 +25,52 @@ zb_remote:
         - Коридор
         - Ванна
 
+  # Цільова яскравість лампи під час серії натискань ☼ / пресетів. Поки timer.pult_dim_hold
+  # активний (10 с після натискання), кроки рахуються від неї, а не від стану лампи:
+  # хмарні лампи (Tuya/MOMAX) звітують про зміну через 4–8 с, і серія «губилась».
+  input_number:
+    pult_dim_target:
+      name: "Пульт: цільова яскравість"
+      icon: mdi:brightness-percent
+      min: 0
+      max: 100
+      step: 1
+      unit_of_measurement: "%"
+      mode: box
+
+  timer:
+    pult_dim_hold:
+      name: "Пульт: серія яскравості"
+      duration: "00:00:10"
+
+  script:
+    pult_dim_apply:
+      alias: "Пульт: застосувати яскравість"
+      description: >-
+        Шле на лампу лише фінальне значення серії: кожен виклик перезапускає скрипт,
+        лампа отримує команду через 0.3 с після останнього натискання.
+      mode: restart
+      fields:
+        entity: {description: "Лампа"}
+        pct: {description: "Яскравість 0–100, 0 = вимкнути"}
+      sequence:
+        - delay: 0.3
+        - if: "{{ pct | int > 0 }}"
+          then:
+            # MOMAX (Tuya cloud) ігнорує turn_on з яскравістю, коли вимкнена: спершу просто ввімкнути
+            - if: "{{ not is_state(entity, 'on') }}"
+              then:
+                - action: light.turn_on
+                  target: {entity_id: "{{ entity }}"}
+                - wait_template: "{{ is_state(entity, 'on') }}"
+                  timeout: 5
+            - action: light.turn_on
+              target: {entity_id: "{{ entity }}"}
+              data: {brightness_pct: "{{ pct | int }}"}
+          else:
+            - action: light.turn_off
+              target: {entity_id: "{{ entity }}"}
+
   automation:
     - id: pult_room_nav
       alias: "Пульт: кімната ◀ ▶"
@@ -40,6 +86,8 @@ zb_remote:
           payload: 7_single
           id: next
       actions:
+        - action: timer.cancel
+          target: {entity_id: timer.pult_dim_hold}
         - if: "{{ trigger.id == 'prev' }}"
           then:
             - action: input_select.select_previous
@@ -78,30 +126,50 @@ zb_remote:
             step: "{{ {'4_single': 10, '8_single': -10, '4_hold': 30, '8_hold': -30}.get(act, 0) }}"
             preset: "{{ {'9_single': 20, '10_single': 50, '11_single': 100}.get(act, 0) }}"
         - choose:
-            - conditions: "{{ act == '1_hold' }}"
-              sequence:
-                - action: light.turn_off
-                  target: {entity_id: "{{ all_lights }}"}
+            # ⏻: основне світло (локальне, швидке) — плитка одразу, потім toggle
             - conditions: "{{ act == '1_single' and cfg.main is defined }}"
               sequence:
+                - action: mqtt.publish
+                  data:
+                    topic: zigbee2mqtt/zb_remote/set
+                    payload: "{{ {'tile1': 'bulb_off|OFF' if is_state(cfg.main, 'on') else 'bulb|ON'} | to_json }}"
                 - action: light.toggle
                   target: {entity_id: "{{ cfg.main }}"}
-            - conditions: "{{ step != 0 and cfg.dim is defined }}"
+            - conditions: "{{ act == '1_hold' }}"
               sequence:
-                - action: light.turn_on
-                  target: {entity_id: "{{ cfg.dim }}"}
-                  data: {brightness_step_pct: "{{ step }}"}
-            - conditions: "{{ preset > 0 and cfg.dim is defined }}"
+                - action: timer.cancel
+                  target: {entity_id: timer.pult_dim_hold}
+                - action: light.turn_off
+                  target: {entity_id: "{{ all_lights }}"}
+            # ☼ / пресети: рахуємо від цільового значення серії, плитка одразу, лампа — у скрипті
+            - conditions: "{{ (step != 0 or preset > 0) and cfg.dim is defined }}"
               sequence:
-                - action: light.turn_on
-                  target: {entity_id: "{{ cfg.dim }}"}
-                  data: {brightness_pct: "{{ preset }}"}
+                - variables:
+                    cur: >-
+                      {% if is_state('timer.pult_dim_hold', 'active') %}{{ states('input_number.pult_dim_target') | int(0) }}
+                      {% elif is_state(cfg.dim, 'on') %}{{ ((state_attr(cfg.dim, 'brightness') | int(0)) * 100 / 255) | round(0) | int }}
+                      {% else %}0{% endif %}
+                    new: "{{ preset if preset > 0 else [[cur | int + step, 0] | max, 100] | min }}"
+                - action: input_number.set_value
+                  target: {entity_id: input_number.pult_dim_target}
+                  data: {value: "{{ new }}"}
+                - action: timer.start
+                  target: {entity_id: timer.pult_dim_hold}
+                - action: mqtt.publish
+                  data:
+                    topic: zigbee2mqtt/zb_remote/set
+                    payload: "{{ {'tile2': 'sun|' ~ new ~ '%' if new | int > 0 else 'sun|OFF'} | to_json }}"
+                - action: script.turn_on
+                  target: {entity_id: script.pult_dim_apply}
+                  data:
+                    variables: {entity: "{{ cfg.dim }}", pct: "{{ new }}"}
 
     - id: pult_render
       alias: "Пульт: екран"
       description: >-
         Пише на пульт шапку й плитки. Загальний: навантаження / батарея дому / надворі.
         Кімната: світло / яскравість лампи / температура. Світло — одразу, решта — раз на 5 хв.
+        Під час серії ☼ (timer.pult_dim_hold) яскравість = цільова, а не запізнілий стан лампи.
       mode: restart
       triggers:
         - trigger: state
@@ -118,13 +186,16 @@ zb_remote:
             - light.light_corridor_l1
             - light.light_bath_l2
             - light.big_lamp_4
+        - trigger: event
+          event_type: timer.finished
+          event_data: {entity_id: timer.pult_dim_hold}
         - trigger: time_pattern
           minutes: /5
         - trigger: homeassistant
           event: start
       variables: *pult_rooms
       actions:
-        - delay: 1
+        - delay: 0.15  # склеїти пачку тригерів; більше не треба — пульт опитує батька раз на 100 мс протягом 10 с
         - variables:
             room: "{{ states('input_select.pult_room') }}"
             payload: >-
@@ -135,7 +206,12 @@ zb_remote:
                 {% set t1 = ('bulb|ON' if m == 'on' else 'bulb_off|OFF' if m == 'off' else 'bulb_off|?') %}
                 {% if c.dim is defined %}
                   {% set d = states(c.dim) %}
-                  {% set t2 = 'sun|' ~ ((state_attr(c.dim, 'brightness') | int(0) * 100 / 255) | round(0) | int) ~ '%' if d == 'on' else 'sun|OFF' if d == 'off' else 'sun|?' %}
+                  {% if is_state('timer.pult_dim_hold', 'active') %}
+                    {% set tg = states('input_number.pult_dim_target') | int(0) %}
+                    {% set t2 = 'sun|' ~ tg ~ '%' if tg > 0 else 'sun|OFF' %}
+                  {% else %}
+                    {% set t2 = 'sun|' ~ ((state_attr(c.dim, 'brightness') | int(0) * 100 / 255) | round(0) | int) ~ '%' if d == 'on' else 'sun|OFF' if d == 'off' else 'sun|?' %}
+                  {% endif %}
                 {% else %}{% set t2 = 'sun|—' %}{% endif %}
                 {% set tv = states(c.temp) if c.temp is defined else 'unknown' %}
                 {% set t3 = 'temp|' ~ (num | format(tv | float)) ~ '°' if is_number(tv) else 'temp|—' %}
