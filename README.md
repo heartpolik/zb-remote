@@ -39,6 +39,10 @@ DIY Zigbee-пульт для Home Assistant: nRF52840 (Pro Micro / nice!nano-к�
 | LED | синій, вбудований | `015` |
 | Батарея | LiPo на `VDDH` (вимір через `VDDH/5`) | — |
 
+### 3D-модель
+
+[`cad/zb-rm.step`](cad/zb-rm.step) — модель пульта (STEP, 8 тіл, експорт з Autodesk 2026-11-23). Відкривається у Fusion, FreeCAD, Onshape або в переглядачі GitHub.
+
 ### Клавіатура (pair matrix)
 
 Кожна кнопка замикає **пару** з 6 ліній. Сканування: одна лінія тягнеться в 0, решта читаються з pull-up; період 25 мс, debounce 2 скани. Пари, замкнені без натискання (живлення, конденсатори), запам'ятовуються при старті як baseline й ігноруються.
@@ -197,6 +201,7 @@ src/
   battery.c, led.c
   font_terminus12.c  згенеровано tools/genfont.py (Terminus 12 px)
   icons.c            згенеровано tools/icons.py
+cad/zb-rm.step       3D-модель пульта (STEP)
 boards/              overlay для promicro_nrf52840/nrf52840/uf2
 z2m/                 external converter для Zigbee2MQTT
 ha/                  пакет Home Assistant (/config/packages/zb_remote.yaml): кімнати, кнопки, екран
