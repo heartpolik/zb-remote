@@ -36,6 +36,7 @@ static struct {
 } alert;
 static int batt_pct = -1;
 static bool charging; /* USB power present */
+static int focus; /* 1..3: tile whose value the d-pad changes (drawn inverted), 0 = none */
 static char title[UI_TEXT_MAX]; /* header text (yellow band), e.g. selected room */
 static bool linked, flip, ready, on;
 static int xoff, yoff;
@@ -66,6 +67,18 @@ static void px(int x, int y, bool v)
 	} else {
 		*b &= ~BIT(Y % 8);
 	}
+}
+
+static void px_toggle(int x, int y)
+{
+	x += xoff;
+	y += yoff;
+	if (x < 0 || x >= W || y < 0 || y >= H) {
+		return;
+	}
+	int X = flip ? (PW - 1 - x) : x;
+	int Y = flip ? (PH - 1 - y) : y;
+	fb[(Y / 8) * PW + X] ^= BIT(Y % 8);
 }
 
 static void rect(int x0, int y0, int x1, int y1, bool fill)
@@ -284,6 +297,17 @@ static void draw_home(void)
 		}
 		draw_icon(tiles[i].icon, x0 + 9, 16);
 		draw_text_box(x0 + 1, 41, 44, tiles[i].text);
+		if (focus == i + 1) {
+			/* inverted value box with rounded corners */
+			for (int y = 42; y <= 57; y++) {
+				for (int x = x0 + 1; x <= x0 + 40; x++) {
+					bool corner = (y == 42 || y == 57) && (x == x0 + 1 || x == x0 + 40);
+					if (!corner) {
+						px_toggle(x, y);
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -470,6 +494,20 @@ void ui_set_status(int battery_pct, bool is_linked)
 {
 	batt_pct = battery_pct;
 	linked = is_linked;
+	if (on) {
+		k_work_submit(&draw_work);
+	}
+}
+
+void ui_set_focus(int f)
+{
+	if (f < 0 || f > UI_TILES) {
+		f = 0;
+	}
+	if (focus == f) {
+		return;
+	}
+	focus = f;
 	if (on) {
 		k_work_submit(&draw_work);
 	}

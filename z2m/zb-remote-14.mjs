@@ -1,7 +1,7 @@
 // Zigbee2MQTT external converter for zb-remote (nRF52840, 14 buttons, 0.91" OLED).
 // Buttons: genMultistateInput.presentValue = button*10 + action (1 single, 2 double, 3 hold).
 // Display 128x64 two-colour (status bar yellow, 3 tiles in a row blue): cluster 0xFC10, 0..2 = tiles "icon|value", 3 = wake s, 4 = alert "icon|l1|l2|l3", 5 = flip,
-// 9 = title, 0x0A = charging (RO, reported by the device on change; battery is not reported while on USB).
+// 9 = title, 0x0B = focus (inverted value box), 0x0A = charging (RO, reported by the device on change; battery is not reported while on USB).
 // Icons: bell door door_open lock unlock bulb bulb_off temp power battery home moon sun flame snow drop plug fan check cross link search star cam tv button
 import * as fz from 'zigbee-herdsman-converters/converters/fromZigbee';
 import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
@@ -109,18 +109,22 @@ async function writeCoalesced(device, ep, attrs) {
 // Z2M calls a converter once per message, so handle every display key here in one ZCL write
 const STR_KEYS = ['title', 'tile1', 'tile2', 'tile3', 'alert'];
 const tzDisplay = {
-    key: [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y'],
+    key: [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y', 'focus'],
     convertSet: async (entity, key, value, meta) => {
         const ep = meta.device.getEndpoint(1);
         const attrs = {};
         const state = {};
-        for (const k of [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y']) {
+        for (const k of [...STR_KEYS, 'wake', 'flip', 'offset_x', 'offset_y', 'focus']) {
             if (!(k in meta.message)) continue;
             const v = meta.message[k];
             if (k === 'offset_x' || k === 'offset_y') {
                 const o = Math.max(-32, Math.min(32, Math.round(Number(v) || 0)));
                 attrs[k === 'offset_x' ? 'xoff' : 'yoff'] = o;
                 state[k] = o;
+            } else if (k === 'focus') {
+                const f = Math.max(0, Math.min(3, Math.round(Number(v) || 0)));
+                attrs.focus = f;
+                state.focus = f;
             } else if (k === 'wake') {
                 attrs.wake = Math.max(0, Math.min(255, Number(v) || 0));
             } else if (k === 'flip') {
@@ -166,6 +170,7 @@ export default {
                 yoff: {name: 'yoff', ID: 0x0007, type: Zcl.DataType.INT8, write: true},
                 title: {name: 'title', ID: 0x0009, type: Zcl.DataType.OCTET_STR, write: true},
                 charging: {name: 'charging', ID: 0x000a, type: Zcl.DataType.UINT8},
+                focus: {name: 'focus', ID: 0x000b, type: Zcl.DataType.UINT8, write: true},
             },
             commands: {},
             commandsResponse: {},
@@ -183,6 +188,7 @@ export default {
         e.text('tile2', ea.STATE_SET).withDescription('Tile 2: "icon|value"'),
         e.text('tile3', ea.STATE_SET).withDescription('Tile 3: "icon|value"'),
         e.text('alert', ea.STATE_SET).withDescription('Full-screen alert "icon|title|line2|line3" (title in the yellow band), empty clears'),
+        e.numeric('focus', ea.STATE_SET).withValueMin(0).withValueMax(3).withDescription('Tile 1-3 whose value the d-pad changes (shown inverted), 0 = none'),
         e.numeric('offset_x', ea.STATE_SET).withValueMin(-16).withValueMax(16).withUnit('px').withDescription('Shift picture horizontally'),
         e.numeric('offset_y', ea.STATE_SET).withValueMin(-32).withValueMax(32).withUnit('px').withDescription('Shift picture vertically'),
         e.binary('flip', ea.STATE_SET, 'ON', 'OFF').withDescription('Rotate screen 180°'),

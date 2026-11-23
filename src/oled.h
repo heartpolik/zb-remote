@@ -16,6 +16,7 @@ void ui_set_title(const char *s);
 void ui_clear_alert(void);
 bool ui_alert_active(void);
 void ui_set_status(int battery_pct, bool linked);
+void ui_set_focus(int tile); /* 1..3 = value the d-pad changes (inverted), 0 = none */
 void ui_set_charging(bool charging); /* USB power present: bolt instead of the level */
 void ui_set_flip(bool flip);
 /* Shift the whole picture (pixels); shows a calibration frame for 20 s */

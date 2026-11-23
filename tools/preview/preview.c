@@ -18,10 +18,13 @@ static void dump(const char *name)
 
 /* title, tile1..3, alert ("" = none), battery % (USB = on USB power) */
 #define USB -2
+static int scene_focus; /* set right before scene() */
 static void scene(const char *name, const char *ttl, const char *t1, const char *t2, const char *t3,
 		  const char *al, int batt)
 {
 	ui_set_charging(batt == USB);
+	ui_set_focus(scene_focus);
+	scene_focus = 0;
 	ui_set_status(batt == USB ? 76 : batt, true);
 	ui_set_title(ttl);
 	ui_set_tile(0, t1);
@@ -43,10 +46,16 @@ static void scene(const char *name, const char *ttl, const char *t1, const char 
 int main(void)
 {
 	scene("overview", "", "power|2.5kW", "battery|100%", "temp|-0.3°", "", 76);
+	scene_focus = 2;
 	scene("room", "Вітальня", "bulb|ON", "sun|60%", "temp|24.1°", "", 76);
+	scene_focus = 2;
+	scene("climate", "Клімат: Кабінет", "snow|холод", "temp|22.5°", "home|23.0°", "", 76);
+	scene_focus = 1;
 	scene("room_nodim", "Коридор", "bulb_off|OFF", "sun|—", "temp|—", "", 76);
 	scene("charging", "", "power|2.5kW", "battery|100%", "temp|-0.3°", "", USB);
 	scene("charging_room", "Кабінет", "bulb|ON", "sun|40%", "temp|23.0°", "", USB);
+	scene("domofon", "", "", "", "", "bell|Домофон|3 відчинити", 76);
+	scene("night", "", "", "", "", "moon|Нічний режим|увімкнено", 76);
 	scene("alert", "", "", "", "", "bell|Домофон|Хтось біля|дверей", 76);
 	scene("alert_title", "", "", "", "", "power|Світло зникло", 76);
 	return 0;

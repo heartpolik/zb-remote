@@ -2,14 +2,29 @@
 # Джерело правди — репозиторій; у HA лежить копія в /config/packages/zb_remote.yaml (scripts/deploy-ha.sh).
 #
 # Прошивка лише шле "кнопка_дія" (zigbee2mqtt/zb_remote/action) й малює те, що пише HA (…/set).
-# Кімната: K− (5) / K+ (7) перемикають input_select.pult_room; "Загальний" — огляд дому.
-# Екран: title (жовта шапка) = кімната, плитки = світло / яскравість лампи / температура.
+#
+# Модель керування — два шари:
+#   Глобальні кнопки (завжди однакові):
+#     ⏻ 1        світло кімнати: щось світить → вимкнути все в кімнаті, інакше — основне;
+#                утримання — вимкнути все світло в домі
+#     ⟳ 2        на «Загальний»
+#     домофон 3  під час дзвінка: натискання — відчинити, утримання — скинути (поза дзвінком нічого)
+#     14         нічний режим вкл/вимк; утримання — вимкнути все світло в домі
+#   Контекстні (кімната, її підрежим «світло» / «клімат»):
+#     ◀ 5 / ▶ 7  кімнати по колу («Загальний» → кімнати)
+#     ▲ 4 / ▼ 8  значення у фокусі (інвертоване на екрані): яскравість ±10 % / уставка ±0.5°;
+#                утримання — ±30 % / ±2°. Кімната без лампи: ▲ / ▼ = основне світло вкл / вимк
+#     центр 6    перемкнути, чим керуємо (світло ↔ клімат, якщо в кімнаті є клімат);
+#                утримання — OK: лампа вкл/вимк або клімат вкл/вимк
+#     9/10/11    пресети: 20/50/100 % або уставки кімнати (cpresets)
 #
 # Під свій дім змінити:
-#   - rooms (anchor &pult_rooms): кімната → main (вкл/вимк), dim (лампа з яскравістю), temp (датчик);
+#   - rooms (anchor &pult_rooms): main (вкл/вимк), dim (лампа з яскравістю), temp (датчик),
+#     climate + cpresets (уставки для 9/10/11);
 #   - input_select.pult_room.options: "Загальний" + ті самі назви кімнат, що в rooms;
-#   - pult_render.triggers: entity_id усіх main/dim (світло оновлюється одразу);
+#   - pult_render.triggers: entity_id усіх main/dim/climate (оновлюються одразу);
 #   - загальний екран (гілка else у pult_render): навантаження / батарея дому / погода;
+#   - домофон: binary_sensor/button у pult_buttons і pult_domofon;
 #   - Z2M friendly_name пристрою має бути `zb_remote` (або замінити топіки).
 zb_remote:
   input_select:
@@ -24,23 +39,28 @@ zb_remote:
         - Кабінет
         - Коридор
         - Ванна
+    pult_layer:
+      name: "Пульт: чим керуємо"
+      icon: mdi:tune-variant
+      options:
+        - світло
+        - клімат
 
-  # Цільова яскравість лампи під час серії натискань ☼ / пресетів. Поки timer.pult_dim_hold
-  # активний (10 с після натискання), кроки рахуються від неї, а не від стану лампи:
+  # Цільове значення серії натискань (яскравість % або уставка °). Поки timer.pult_series
+  # активний (10 с після натискання), кроки рахуються від нього, а не від стану пристрою:
   # хмарні лампи (Tuya/MOMAX) звітують про зміну через 4–8 с, і серія «губилась».
   input_number:
-    pult_dim_target:
-      name: "Пульт: цільова яскравість"
-      icon: mdi:brightness-percent
+    pult_target:
+      name: "Пульт: цільове значення"
+      icon: mdi:target
       min: 0
       max: 100
-      step: 1
-      unit_of_measurement: "%"
+      step: 0.5
       mode: box
 
   timer:
-    pult_dim_hold:
-      name: "Пульт: серія яскравості"
+    pult_series:
+      name: "Пульт: серія натискань"
       duration: "00:00:10"
 
   script:
@@ -71,10 +91,41 @@ zb_remote:
             - action: light.turn_off
               target: {entity_id: "{{ entity }}"}
 
+    pult_climate_apply:
+      alias: "Пульт: застосувати уставку"
+      description: Фінальна уставка серії ▲▼ / пресетів — через 0.3 с після останнього натискання.
+      mode: restart
+      fields:
+        entity: {description: "Клімат"}
+        temp: {description: "Уставка, °C"}
+      sequence:
+        - delay: 0.3
+        - action: climate.set_temperature
+          target: {entity_id: "{{ entity }}"}
+          data: {temperature: "{{ temp | float }}"}
+
+    pult_toast:
+      alias: "Пульт: коротке сповіщення"
+      description: Показати сповіщення на пульті на кілька секунд.
+      mode: restart
+      fields:
+        alert: {description: '"іконка|заголовок|рядок2"'}
+        seconds: {description: "Скільки показувати"}
+      sequence:
+        - action: mqtt.publish
+          data:
+            topic: zigbee2mqtt/zb_remote/set
+            payload: "{{ {'alert': alert} | to_json }}"
+        - delay: "{{ seconds | default(3) }}"
+        - action: mqtt.publish
+          data:
+            topic: zigbee2mqtt/zb_remote/set
+            payload: '{"alert": ""}'
+
   automation:
     - id: pult_room_nav
       alias: "Пульт: кімната ◀ ▶"
-      description: K− (5) — попередня кімната, K+ (7) — наступна (по колу).
+      description: ◀ (5) — попередня кімната, ▶ (7) — наступна (по колу).
       mode: queued
       triggers:
         - trigger: mqtt
@@ -86,8 +137,6 @@ zb_remote:
           payload: 7_single
           id: next
       actions:
-        - action: timer.cancel
-          target: {entity_id: timer.pult_dim_hold}
         - if: "{{ trigger.id == 'prev' }}"
           then:
             - action: input_select.select_previous
@@ -98,63 +147,189 @@ zb_remote:
               target: {entity_id: input_select.pult_room}
               data: {cycle: true}
 
-    - id: pult_light_buttons
-      alias: "Пульт: світло в обраній кімнаті"
-      description: >-
-        ⏻ (1) — основне світло вкл/вимк, утримання — вимкнути все світло з пульта.
-        ☼ (4/8) — яскравість лампи ±10 % (утримання ±30 %), 20/50/100 % (9/10/11).
+    - id: pult_room_changed
+      alias: "Пульт: нова кімната → світло"
+      description: Після зміни кімнати пульт керує світлом, незавершена серія ▲▼ скидається.
       mode: queued
+      triggers:
+        - trigger: state
+          entity_id: input_select.pult_room
+      actions:
+        - action: timer.cancel
+          target: {entity_id: timer.pult_series}
+        - action: input_select.select_option
+          target: {entity_id: input_select.pult_layer}
+          data: {option: світло}
+
+    - id: pult_buttons
+      alias: "Пульт: кнопки"
+      description: Глобальні кнопки (⏻ ⟳ домофон 14) і контекстні (▲▼ центр 9/10/11) — див. шапку пакета.
+      mode: queued
+      max: 20
       triggers:
         - trigger: mqtt
           topic: zigbee2mqtt/zb_remote/action
       variables: &pult_rooms
         rooms:
           Вітальня: {main: light.light_diningroom_l2, dim: light.wled, temp: sensor.sensor_dining_temperature}
-          Кухня: {main: light.light_diningroom_l1, temp: sensor.sensor_kitchen_temperature}
+          Кухня: {main: light.light_diningroom_l1, temp: sensor.sensor_kitchen_temperature, climate: climate.floor_thermostat_floor_thermostat, cpresets: [21, 24, 27]}
           Спальня: {main: light.light_bedroom_l1, dim: light.spalnia_wled, temp: sensor.nous_e6_temperature}
-          Кабінет: {main: light.light_bedroom_l2, dim: light.momax_smart_bright_lamp_wifi_bt_ql6s, temp: sensor.esphome_web_9480c0_mhi_ac_return_air_temperature}
+          Кабінет: {main: light.light_bedroom_l2, dim: light.momax_smart_bright_lamp_wifi_bt_ql6s, temp: sensor.esphome_web_9480c0_mhi_ac_return_air_temperature, climate: climate.esphome_web_9480c0_mhi_ac, cpresets: [20, 22, 24]}
           Коридор: {main: light.light_corridor_l1}
           Ванна: {main: light.light_bath_l2, dim: light.big_lamp_4, temp: sensor.sensor_bath_temperature}
       actions:
         - variables:
             act: "{{ trigger.payload }}"
-            cfg: "{{ rooms.get(states('input_select.pult_room'), {}) }}"
+            room: "{{ states('input_select.pult_room') }}"
+            cfg: "{{ rooms.get(room, {}) }}"
+            climate_mode: "{{ cfg.climate is defined and is_state('input_select.pult_layer', 'клімат') }}"
+            room_lights: "{{ ([cfg.main] + ([cfg.dim] if cfg.dim is defined else [])) if cfg.main is defined else [] }}"
             all_lights: >-
               {% set ns = namespace(l=[]) %}
               {% for r in rooms.values() %}{% set ns.l = ns.l + [r.main] + ([r.dim] if r.dim is defined else []) %}{% endfor %}
               {{ ns.l }}
-            step: "{{ {'4_single': 10, '8_single': -10, '4_hold': 30, '8_hold': -30}.get(act, 0) }}"
-            preset: "{{ {'9_single': 20, '10_single': 50, '11_single': 100}.get(act, 0) }}"
+            ringing: "{{ is_state('binary_sensor.koridor_domofon_incoming_call', 'on') }}"
+            step: "{{ {'4_single': 1, '8_single': -1, '4_hold': 3, '8_hold': -3}.get(act, 0) }}"
+            preset_i: "{{ {'9_single': 0, '10_single': 1, '11_single': 2}.get(act, -1) }}"
         - choose:
-            # ⏻: основне світло (локальне, швидке) — плитка одразу, потім toggle
-            - conditions: "{{ act == '1_single' and cfg.main is defined }}"
+            # ── глобальні
+            - conditions: "{{ act in ['1_hold', '14_hold'] }}"
               sequence:
+                - action: timer.cancel
+                  target: {entity_id: timer.pult_series}
+                - action: light.turn_off
+                  target: {entity_id: "{{ all_lights }}"}
+                - action: script.turn_on
+                  target: {entity_id: script.pult_toast}
+                  data: {variables: {alert: "bulb_off|Усе світло|вимкнено"}}
+            - conditions: "{{ act == '14_single' }}"
+              sequence:
+                - variables:
+                    night_next: "{{ not is_state('input_boolean.night_mode', 'on') }}"
+                - action: script.turn_on
+                  target: {entity_id: script.pult_toast}
+                  data: {variables: {alert: "{{ 'moon|Нічний режим|увімкнено' if night_next else 'sun|Нічний режим|вимкнено' }}"}}
+                - action: "input_boolean.turn_{{ 'on' if night_next else 'off' }}"
+                  target: {entity_id: input_boolean.night_mode}
+            - conditions: "{{ act == '2_single' }}"
+              sequence:
+                - action: input_select.select_option
+                  target: {entity_id: input_select.pult_room}
+                  data: {option: Загальний}
+            - conditions: "{{ act == '3_single' and ringing }}"
+              sequence:
+                - action: button.press
+                  target: {entity_id: button.koridor_domofon_open}
+                - action: script.turn_on
+                  target: {entity_id: script.pult_toast}
+                  data: {variables: {alert: "door_open|Домофон|відчинено"}}
+            - conditions: "{{ act == '3_hold' and ringing }}"
+              sequence:
+                - action: button.press
+                  target: {entity_id: button.koridor_domofon_reject}
+                - action: script.turn_on
+                  target: {entity_id: script.pult_toast}
+                  data: {variables: {alert: "cross|Домофон|скинуто"}}
+
+            # ── ⏻: світло кімнати
+            - conditions: "{{ act == '1_single' and room_lights | count > 0 }}"
+              sequence:
+                - variables:
+                    any_on: "{{ room_lights | select('is_state', 'on') | list | count > 0 }}"
+                - if: "{{ not climate_mode }}"
+                  then:
+                    - action: mqtt.publish
+                      data:
+                        topic: zigbee2mqtt/zb_remote/set
+                        payload: >-
+                          {% set p = {'tile1': 'bulb_off|OFF' if any_on else 'bulb|ON'} %}
+                          {% if any_on and cfg.dim is defined %}{% set p = dict(p, tile2='sun|OFF') %}{% endif %}
+                          {{ p | to_json }}
+                - if: "{{ any_on }}"
+                  then:
+                    - action: timer.cancel
+                      target: {entity_id: timer.pult_series}
+                    - action: light.turn_off
+                      target: {entity_id: "{{ room_lights }}"}
+                  else:
+                    - action: light.turn_on
+                      target: {entity_id: "{{ cfg.main }}"}
+
+            # ── центр: світло ↔ клімат
+            - conditions: "{{ act == '6_single' and cfg.climate is defined }}"
+              sequence:
+                - action: timer.cancel
+                  target: {entity_id: timer.pult_series}
+                - action: input_select.select_option
+                  target: {entity_id: input_select.pult_layer}
+                  data: {option: "{{ 'світло' if climate_mode else 'клімат' }}"}
+
+            # ── центр утримання: OK
+            - conditions: "{{ act == '6_hold' and climate_mode }}"
+              sequence:
+                - variables:
+                    was_on: "{{ not is_state(cfg.climate, 'off') }}"
                 - action: mqtt.publish
                   data:
                     topic: zigbee2mqtt/zb_remote/set
-                    payload: "{{ {'tile1': 'bulb_off|OFF' if is_state(cfg.main, 'on') else 'bulb|ON'} | to_json }}"
-                - action: light.toggle
-                  target: {entity_id: "{{ cfg.main }}"}
-            - conditions: "{{ act == '1_hold' }}"
+                    payload: "{{ {'tile1': 'power|OFF' if was_on else 'power|…'} | to_json }}"
+                - action: "climate.turn_{{ 'off' if was_on else 'on' }}"
+                  target: {entity_id: "{{ cfg.climate }}"}
+            - conditions: "{{ act == '6_hold' and cfg.main is defined }}"
               sequence:
+                - variables:
+                    ent: "{{ cfg.dim if cfg.dim is defined else cfg.main }}"
+                    was_on: "{{ is_state(ent, 'on') }}"
                 - action: timer.cancel
-                  target: {entity_id: timer.pult_dim_hold}
-                - action: light.turn_off
-                  target: {entity_id: "{{ all_lights }}"}
-            # ☼ / пресети: рахуємо від цільового значення серії, плитка одразу, лампа — у скрипті
-            - conditions: "{{ (step != 0 or preset > 0) and cfg.dim is defined }}"
+                  target: {entity_id: timer.pult_series}
+                - action: mqtt.publish
+                  data:
+                    topic: zigbee2mqtt/zb_remote/set
+                    payload: >-
+                      {% if cfg.dim is defined %}{{ {'tile2': 'sun|OFF' if was_on else 'sun|…'} | to_json }}
+                      {% else %}{{ {'tile1': 'bulb_off|OFF' if was_on else 'bulb|ON'} | to_json }}{% endif %}
+                - action: "light.turn_{{ 'off' if was_on else 'on' }}"
+                  target: {entity_id: "{{ ent }}"}
+
+            # ── ▲▼ / пресети: клімат (±0.5°, утримання ±2°)
+            - conditions: "{{ climate_mode and (step != 0 or preset_i >= 0) }}"
+              sequence:
+                - variables:
+                    tmin: "{{ state_attr(cfg.climate, 'min_temp') | float(16) }}"
+                    tmax: "{{ state_attr(cfg.climate, 'max_temp') | float(30) }}"
+                    cur: >-
+                      {% if is_state('timer.pult_series', 'active') %}{{ states('input_number.pult_target') | float(22) }}
+                      {% else %}{{ state_attr(cfg.climate, 'temperature') | float(22) }}{% endif %}
+                    raw: "{{ (cfg.cpresets | default([20, 22, 24]))[preset_i] if preset_i >= 0 else cur | float + (0.5 * step if step | abs == 1 else 2 * step / 3) }}"
+                    new: "{{ [[((raw | float) * 2) | round(0) / 2, tmin | float] | max, tmax | float] | min }}"
+                - action: input_number.set_value
+                  target: {entity_id: input_number.pult_target}
+                  data: {value: "{{ new }}"}
+                - action: timer.start
+                  target: {entity_id: timer.pult_series}
+                - action: mqtt.publish
+                  data:
+                    topic: zigbee2mqtt/zb_remote/set
+                    payload: "{{ {'tile2': 'temp|' ~ ('%.1f' | format(new | float)) ~ '°'} | to_json }}"
+                - action: script.turn_on
+                  target: {entity_id: script.pult_climate_apply}
+                  data:
+                    variables: {entity: "{{ cfg.climate }}", temp: "{{ new }}"}
+
+            # ── ▲▼ / пресети: лампа (цільове значення серії, плитка одразу, лампа — у скрипті)
+            - conditions: "{{ (step != 0 or preset_i >= 0) and cfg.dim is defined }}"
               sequence:
                 - variables:
                     cur: >-
-                      {% if is_state('timer.pult_dim_hold', 'active') %}{{ states('input_number.pult_dim_target') | int(0) }}
+                      {% if is_state('timer.pult_series', 'active') %}{{ states('input_number.pult_target') | int(0) }}
                       {% elif is_state(cfg.dim, 'on') %}{{ ((state_attr(cfg.dim, 'brightness') | int(0)) * 100 / 255) | round(0) | int }}
                       {% else %}0{% endif %}
-                    new: "{{ preset if preset > 0 else [[cur | int + step, 0] | max, 100] | min }}"
+                    new: "{{ [20, 50, 100][preset_i] if preset_i >= 0 else [[cur | int + step * 10, 0] | max, 100] | min }}"
                 - action: input_number.set_value
-                  target: {entity_id: input_number.pult_dim_target}
+                  target: {entity_id: input_number.pult_target}
                   data: {value: "{{ new }}"}
                 - action: timer.start
-                  target: {entity_id: timer.pult_dim_hold}
+                  target: {entity_id: timer.pult_series}
                 - action: mqtt.publish
                   data:
                     topic: zigbee2mqtt/zb_remote/set
@@ -164,16 +339,26 @@ zb_remote:
                   data:
                     variables: {entity: "{{ cfg.dim }}", pct: "{{ new }}"}
 
+            # ── ▲▼ у кімнаті без лампи: основне світло вкл / вимк
+            - conditions: "{{ act in ['4_single', '8_single'] and cfg.main is defined }}"
+              sequence:
+                - action: mqtt.publish
+                  data:
+                    topic: zigbee2mqtt/zb_remote/set
+                    payload: "{{ {'tile1': 'bulb|ON' if act == '4_single' else 'bulb_off|OFF'} | to_json }}"
+                - action: "light.turn_{{ 'on' if act == '4_single' else 'off' }}"
+                  target: {entity_id: "{{ cfg.main }}"}
+
     - id: pult_render
       alias: "Пульт: екран"
       description: >-
-        Пише на пульт шапку й плитки. Загальний: навантаження / батарея дому / надворі.
-        Кімната: світло / яскравість лампи / температура. Світло — одразу, решта — раз на 5 хв.
-        Під час серії ☼ (timer.pult_dim_hold) яскравість = цільова, а не запізнілий стан лампи.
+        Пише на пульт шапку, плитки й фокус. Загальний: навантаження / батарея дому / надворі.
+        Кімната: світло / яскравість лампи / температура; клімат: режим / уставка / температура.
+        Під час серії ▲▼ (timer.pult_series) значення у фокусі — цільове, а не запізнілий стан.
       mode: restart
       triggers:
         - trigger: state
-          entity_id: input_select.pult_room
+          entity_id: [input_select.pult_room, input_select.pult_layer]
         - trigger: state
           entity_id:
             - light.light_diningroom_l2
@@ -186,36 +371,50 @@ zb_remote:
             - light.light_corridor_l1
             - light.light_bath_l2
             - light.big_lamp_4
+            - climate.floor_thermostat_floor_thermostat
+            - climate.esphome_web_9480c0_mhi_ac
         - trigger: event
           event_type: timer.finished
-          event_data: {entity_id: timer.pult_dim_hold}
+          event_data: {entity_id: timer.pult_series}
         - trigger: time_pattern
           minutes: /5
         - trigger: homeassistant
           event: start
       variables: *pult_rooms
       actions:
-        - delay: 0.15  # склеїти пачку тригерів; більше не треба — пульт опитує батька раз на 100 мс протягом 10 с
+        - delay: 0.15  # склеїти пачку тригерів; пульт після натискання опитує батька раз на 100 мс протягом 10 с
         - variables:
             room: "{{ states('input_select.pult_room') }}"
+            series: "{{ is_state('timer.pult_series', 'active') }}"
+            tgt: "{{ states('input_number.pult_target') | float(0) }}"
             payload: >-
               {% set num = '%.1f' %}
               {% if room in rooms %}
                 {% set c = rooms[room] %}
-                {% set m = states(c.main) %}
-                {% set t1 = ('bulb|ON' if m == 'on' else 'bulb_off|OFF' if m == 'off' else 'bulb_off|?') %}
-                {% if c.dim is defined %}
-                  {% set d = states(c.dim) %}
-                  {% if is_state('timer.pult_dim_hold', 'active') %}
-                    {% set tg = states('input_number.pult_dim_target') | int(0) %}
-                    {% set t2 = 'sun|' ~ tg ~ '%' if tg > 0 else 'sun|OFF' %}
-                  {% else %}
-                    {% set t2 = 'sun|' ~ ((state_attr(c.dim, 'brightness') | int(0) * 100 / 255) | round(0) | int) ~ '%' if d == 'on' else 'sun|OFF' if d == 'off' else 'sun|?' %}
-                  {% endif %}
-                {% else %}{% set t2 = 'sun|—' %}{% endif %}
-                {% set tv = states(c.temp) if c.temp is defined else 'unknown' %}
-                {% set t3 = 'temp|' ~ (num | format(tv | float)) ~ '°' if is_number(tv) else 'temp|—' %}
-                {{ {'title': room, 'tile1': t1, 'tile2': t2, 'tile3': t3} | to_json }}
+                {% if c.climate is defined and is_state('input_select.pult_layer', 'клімат') %}
+                  {% set m = states(c.climate) %}
+                  {% set modes = {'off': 'power|OFF', 'cool': 'snow|холод', 'heat': 'flame|тепло', 'heat_cool': 'fan|авто', 'auto': 'fan|авто', 'fan_only': 'fan|вент', 'dry': 'drop|сухо'} %}
+                  {% set t1 = modes.get(m, 'power|?') %}
+                  {% set sp = tgt if series else state_attr(c.climate, 'temperature') %}
+                  {% set t2 = 'temp|' ~ (num | format(sp | float)) ~ '°' if is_number(sp) else 'temp|—' %}
+                  {% set cur = state_attr(c.climate, 'current_temperature') %}
+                  {% set t3 = 'home|' ~ (num | format(cur | float)) ~ '°' if is_number(cur) else 'home|—' %}
+                  {{ {'title': 'Клімат: ' ~ room, 'tile1': t1, 'tile2': t2, 'tile3': t3, 'focus': 2} | to_json }}
+                {% else %}
+                  {% set m = states(c.main) %}
+                  {% set t1 = ('bulb|ON' if m == 'on' else 'bulb_off|OFF' if m == 'off' else 'bulb_off|?') %}
+                  {% if c.dim is defined %}
+                    {% if series %}
+                      {% set t2 = 'sun|' ~ (tgt | int) ~ '%' if tgt > 0 else 'sun|OFF' %}
+                    {% else %}
+                      {% set d = states(c.dim) %}
+                      {% set t2 = 'sun|' ~ ((state_attr(c.dim, 'brightness') | int(0) * 100 / 255) | round(0) | int) ~ '%' if d == 'on' else 'sun|OFF' if d == 'off' else 'sun|?' %}
+                    {% endif %}
+                  {% else %}{% set t2 = 'sun|—' %}{% endif %}
+                  {% set tv = states(c.temp) if c.temp is defined else 'unknown' %}
+                  {% set t3 = 'temp|' ~ (num | format(tv | float)) ~ '°' if is_number(tv) else 'temp|—' %}
+                  {{ {'title': room, 'tile1': t1, 'tile2': t2, 'tile3': t3, 'focus': 2 if c.dim is defined else 1} | to_json }}
+                {% endif %}
               {% else %}
                 {% set load = states('sensor.must_p_load') %}
                 {% set soc = states('sensor.felicity_soc') %}
@@ -223,12 +422,41 @@ zb_remote:
                 {% set t1 = 'power|' ~ (((load | float / 1000) | round(1)) ~ 'kW' if is_number(load) and load | float >= 1000 else (load | int ~ 'W') if is_number(load) else '—') %}
                 {% set t2 = 'battery|' ~ (soc | int ~ '%' if is_number(soc) else '—') %}
                 {% set t3 = 'temp|' ~ ((num | format(out | float)) ~ '°' if is_number(out) else '—') %}
-                {{ {'title': '', 'tile1': t1, 'tile2': t2, 'tile3': t3} | to_json }}
+                {{ {'title': '', 'tile1': t1, 'tile2': t2, 'tile3': t3, 'focus': 0} | to_json }}
               {% endif %}
         - action: mqtt.publish
           data:
             topic: zigbee2mqtt/zb_remote/set
             payload: "{{ payload | to_json }}"
+
+    - id: pult_domofon
+      alias: "Пульт: домофон"
+      description: Дзвінок → сповіщення на пульті (3 — відчинити, утримання — скинути); кінець дзвінка → прибрати.
+      mode: restart
+      triggers:
+        - trigger: state
+          entity_id: binary_sensor.koridor_domofon_incoming_call
+          to: "on"
+          id: ring
+        - trigger: state
+          entity_id: binary_sensor.koridor_domofon_incoming_call
+          to: "off"
+          id: done
+      actions:
+        - if: "{{ trigger.id == 'ring' }}"
+          then:
+            - action: mqtt.publish
+              data:
+                topic: zigbee2mqtt/zb_remote/set
+                payload: '{"alert": "bell|Домофон|3 відчинити", "wake": 30}'
+          else:
+            # якщо відчинили/скинули з пульта — тост прибере себе сам
+            - condition: template
+              value_template: "{{ not is_state('script.pult_toast', 'on') }}"
+            - action: mqtt.publish
+              data:
+                topic: zigbee2mqtt/zb_remote/set
+                payload: '{"alert": ""}'
 
     - id: pult_room_timeout
       alias: "Пульт: повернення на загальний екран"
